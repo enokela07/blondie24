@@ -13,6 +13,7 @@ const std::array<double, 32> initial_board = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0,
     0,  0,  0,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1, 1, 1, 1};
 const int UL = 0, UR = 1, DL = 2, DR = 3;//represent directions as int to be faster
+const float KING_VALUE = 1.5f; // fixed king value 
 
 int get_step(int i, int direction) {
   bool is_even = ((i >> 2) & 1) == 0;//check if row is an even row(same as dividing by 4 and checking mod 2, switched to bitwise to be faster)
@@ -118,7 +119,6 @@ class NeuralNetwork{
     //per-weight mutation rates: each weight has its own sigma
     //same shape as the weight matrices they mutate
     Eigen::MatrixXd sigma1, sigma2, sigma3;
-    double K;
 
     //mutation constant from the paper (n = 1741 total weights)
     //tau = 1/sqrt(2*sqrt(n)): sqrt(1741)=41.72, 2*41.72=83.45, sqrt(83.45)=9.135
@@ -133,14 +133,12 @@ class NeuralNetwork{
       sigma1 = Eigen::MatrixXd::Constant(33, 40, 0.05);
       sigma2 = Eigen::MatrixXd::Constant(41, 10, 0.05);
       sigma3 = Eigen::MatrixXd::Constant(11, 1, 0.05);
-      K = 2.0;
     }
 
     //with specific values(when using replicate)
-    NeuralNetwork(double K,
-                  Eigen::MatrixXd w1, Eigen::MatrixXd w2, Eigen::MatrixXd w3,
+    NeuralNetwork(Eigen::MatrixXd w1, Eigen::MatrixXd w2, Eigen::MatrixXd w3,
                   Eigen::MatrixXd sigma1, Eigen::MatrixXd sigma2, Eigen::MatrixXd sigma3)
-      : w1(w1), w2(w2), w3(w3), sigma1(sigma1), sigma2(sigma2), sigma3(sigma3), K(K) {}
+      : w1(w1), w2(w2), w3(w3), sigma1(sigma1), sigma2(sigma2), sigma3(sigma3) {}
 
     double predict(const std::array<double, 32> &board_state) {
       //piece difference = sum of all 32 squares
@@ -196,11 +194,7 @@ class NeuralNetwork{
       Eigen::MatrixXd new_w2 = w2 + new_sigma2.unaryExpr([&](double si) { return si * normal(rng); });
       Eigen::MatrixXd new_w3 = w3 + new_sigma3.unaryExpr([&](double si) { return si * normal(rng); });
 
-      //mutate K
-      double new_K = K * std::exp(normal(rng)/std::sqrt(2));
-      new_K = std::clamp(new_K, 1.0, 3.0);
-
-      return NeuralNetwork(new_K, new_w1, new_w2, new_w3, new_sigma1, new_sigma2, new_sigma3);
+      return NeuralNetwork(new_w1, new_w2, new_w3, new_sigma1, new_sigma2, new_sigma3);
     }
 };
 
@@ -215,17 +209,17 @@ struct JumpChain {
 
 //finds all jump chains from a position
 void find_jump_chains(const std::array<double, 32> &board, int pos, double piece,
-                      double K_value, int current_player,
+                      int current_player,
                       std::vector<int> &captured_so_far,
                       std::vector<JumpChain> &results, int original_start) {
 
   //figure out which directions this piece can move
   std::vector<int> directions;
-  if (piece == 1 || std::abs(piece) == K_value) {
+  if (piece == 1 || std::abs(piece) == KING_VALUE) {
     directions.push_back(UL);
     directions.push_back(UR);
   }
-  if (piece == -1 || std::abs(piece) == K_value) {
+  if (piece == -1 || std::abs(piece) == KING_VALUE) {
     directions.push_back(DL);
     directions.push_back(DR);
   }
@@ -239,9 +233,9 @@ void find_jump_chains(const std::array<double, 32> &board, int pos, double piece
     // piece on mid must be an opponent piece
     bool is_opponent;
     if (current_player == 1)
-      is_opponent = (board[mid] == -1 || board[mid] == -K_value);
+      is_opponent = (board[mid] == -1 || board[mid] == -KING_VALUE);
     else
-      is_opponent = (board[mid] == 1 || board[mid] == K_value);
+      is_opponent = (board[mid] == 1 || board[mid] == KING_VALUE);
 
     if (!is_opponent) continue;//skip if its not an opponent piece
 
@@ -277,7 +271,7 @@ void find_jump_chains(const std::array<double, 32> &board, int pos, double piece
     temp_board[pos] = 0;
     temp_board[land] = piece;
 
-    find_jump_chains(temp_board, land, piece, K_value, current_player,
+    find_jump_chains(temp_board, land, piece, current_player,
                      captured_so_far, results, original_start);
 
     captured_so_far.pop_back();
@@ -294,7 +288,7 @@ void find_jump_chains(const std::array<double, 32> &board, int pos, double piece
 }
 //check and get all legal moves
 std::vector<Move> get_legal_moves(const std::array<double, 32> &board_state,
-                                   int current_player, double K_value) {
+                                   int current_player) {
   std::vector<Move> slides;
   std::vector<Move> jumps;
 
@@ -304,19 +298,19 @@ std::vector<Move> get_legal_moves(const std::array<double, 32> &board_state,
     //check if this piece belongs to current player
     bool is_mine;
     if (current_player == 1)
-      is_mine = (piece == 1 || piece == K_value);
+      is_mine = (piece == 1 || piece == KING_VALUE);
     else
-      is_mine = (piece == -1 || piece == -K_value);
+      is_mine = (piece == -1 || piece == -KING_VALUE);
 
     if (!is_mine) continue;
 
     //figure out which directions this piece can move
     std::vector<int> directions;
-    if (piece == 1 || std::abs(piece) == K_value) {
+    if (piece == 1 || std::abs(piece) == KING_VALUE) {
       directions.push_back(UL);
       directions.push_back(UR);
     }
-    if (piece == -1 || std::abs(piece) == K_value) {
+    if (piece == -1 || std::abs(piece) == KING_VALUE) {
       directions.push_back(DL);
       directions.push_back(DR);
     }
@@ -334,9 +328,9 @@ std::vector<Move> get_legal_moves(const std::array<double, 32> &board_state,
       //if there's an opponent in mid, then its a jump'
       bool is_opponent;
       if (current_player == 1)
-        is_opponent = (board_state[mid] == -1 || board_state[mid] == -K_value);
+        is_opponent = (board_state[mid] == -1 || board_state[mid] == -KING_VALUE);
       else
-        is_opponent = (board_state[mid] == 1 || board_state[mid] == K_value);
+        is_opponent = (board_state[mid] == 1 || board_state[mid] == KING_VALUE);
 
       if (is_opponent) {
         int land = get_step(mid, dir);
@@ -351,7 +345,7 @@ std::vector<Move> get_legal_moves(const std::array<double, 32> &board_state,
           temp_board[i] = 0;
           temp_board[land] = piece;
 
-          find_jump_chains(temp_board, land, piece, K_value, current_player,
+          find_jump_chains(temp_board, land, piece, current_player,
                            captured_so_far, chains, i);
 
           if (chains.empty()) {
@@ -375,7 +369,7 @@ std::vector<Move> get_legal_moves(const std::array<double, 32> &board_state,
 
 
 std::array<double, 32> simulate_move(std::array<double, 32> board,
-                                      const Move &move, double K_value) {
+                                      const Move &move) {
   // grab the piece that's moving
   double piece = board[move.start];
 
@@ -392,11 +386,11 @@ std::array<double, 32> simulate_move(std::array<double, 32> board,
 
   //promote kings
   if (piece == 1 && move.end <= 3) {
-    board[move.end] = K_value;
+    board[move.end] = KING_VALUE;
   }
   //promote kings
   else if (piece == -1 && move.end >= 28) {
-    board[move.end] = -K_value;
+    board[move.end] = -KING_VALUE;
   }
 
   return board;
@@ -429,7 +423,7 @@ double minimax(const std::array<double, 32> &board_state, int depth,
 
       // condition 2: active state (forced jump at leaf)
       int cur_player = maximizing_player ? 1 : -1;
-      auto leaf_moves = get_legal_moves(board_state, cur_player, network.K);
+      auto leaf_moves = get_legal_moves(board_state, cur_player);
       if (!leaf_moves.empty() && leaf_moves[0].is_jump) {
         extension += 2;
       }
@@ -447,7 +441,7 @@ double minimax(const std::array<double, 32> &board_state, int depth,
 
   if (maximizing_player) {
     //network's turn (player 1), wants highest score
-    std::vector<Move> legal_moves = get_legal_moves(board_state, 1, network.K);
+    std::vector<Move> legal_moves = get_legal_moves(board_state, 1);
 
     //sort moves(this is supposed to make alpha beta pruning more efficient)
     //because closer to king row moves are generally better
@@ -467,7 +461,7 @@ double minimax(const std::array<double, 32> &board_state, int depth,
 
     double max_eval = -1e9;
     for (auto &move : legal_moves) {
-      auto new_board = simulate_move(board_state, move, network.K);
+      auto new_board = simulate_move(board_state, move);
       double eval = minimax(new_board, next_depth, false, network,
                             moves_played + 1, next_forced, in_extension, alpha, beta);
       max_eval = std::max(max_eval, eval);
@@ -481,7 +475,7 @@ double minimax(const std::array<double, 32> &board_state, int depth,
 
   } else {
     // opponent's turn (player -1), wants lowest score
-    std::vector<Move> legal_moves = get_legal_moves(board_state, -1, network.K);
+    std::vector<Move> legal_moves = get_legal_moves(board_state, -1);
 
     // sort moves
     std::sort(legal_moves.begin(), legal_moves.end(),
@@ -497,7 +491,7 @@ double minimax(const std::array<double, 32> &board_state, int depth,
 
     double min_eval = 1e9;
     for (auto &move : legal_moves) {
-      auto new_board = simulate_move(board_state, move, network.K);
+      auto new_board = simulate_move(board_state, move);
       double eval = minimax(new_board, next_depth, true, network,
                             moves_played + 1, next_forced, in_extension, alpha, beta);
       min_eval = std::min(min_eval, eval);
@@ -528,12 +522,11 @@ int play_game(NeuralNetwork &network1, NeuralNetwork &network2) {
       else return 0;                            // tie
     }
 
-    // get the right network and K for current player
+    // get the right network for current player
     NeuralNetwork &current_net = (current_player == 1) ? network1 : network2;
-    double K_value = current_net.K;
 
     // find legal moves
-    std::vector<Move> legal_moves = get_legal_moves(board, current_player, K_value);
+    std::vector<Move> legal_moves = get_legal_moves(board, current_player);
 
     // no moves = trapped = loss for current player
     if (legal_moves.empty()) {
@@ -548,7 +541,7 @@ int play_game(NeuralNetwork &network1, NeuralNetwork &network2) {
       double best_score = -1e9;
       double root_alpha = -1e9;
       for (auto &move : legal_moves) {
-        auto new_board = simulate_move(board, move, K_value);
+        auto new_board = simulate_move(board, move);
         double score = minimax(new_board, 3, false, network1,
                                moves_played + 1, 0, false, root_alpha, 1e9);
         if (score > best_score) {
@@ -564,7 +557,7 @@ int play_game(NeuralNetwork &network1, NeuralNetwork &network2) {
       double best_score = 1e9;
       double root_beta = 1e9;
       for (auto &move : legal_moves) {
-        auto new_board = simulate_move(board, move, K_value);
+        auto new_board = simulate_move(board, move);
         double score = minimax(new_board, 3, true, network2,
                                moves_played + 1, 0, false, -1e9, root_beta);
         if (score < best_score) {
@@ -577,7 +570,7 @@ int play_game(NeuralNetwork &network1, NeuralNetwork &network2) {
     }
 
     // make the best move
-    board = simulate_move(board, best_move, K_value);
+    board = simulate_move(board, best_move);
     moves_played += 1;
     current_player *= -1; // swap players
   }
@@ -660,7 +653,7 @@ int main() {
   }
 
   std::cout << "\nevolution complete!" << std::endl;
-  std::cout << "best network K value: " << population[0].K << std::endl;
+  std::cout << "king value (fixed): " << KING_VALUE << std::endl;
 
   // save best network's weights to binary file
   NeuralNetwork &best = population[0];
@@ -674,8 +667,7 @@ int main() {
       out.write(reinterpret_cast<const char*>(m.data()), rows * cols * sizeof(double));
     };
 
-    // write K
-    out.write(reinterpret_cast<const char*>(&best.K), sizeof(double));
+
 
     // write weights and sigmas
     write_matrix(best.w1);
@@ -702,7 +694,7 @@ int main() {
       txt << m << "\n\n";
     };
 
-    txt << "K: " << best.K << "\n\n";
+    txt << "K (fixed): " << KING_VALUE << "\n\n";
     write_matrix_txt("w1", best.w1);
     write_matrix_txt("w2", best.w2);
     write_matrix_txt("w3", best.w3);
